@@ -1,11 +1,6 @@
 #include "CWGenerator.h"
 #include "MorseDecoder.h"
 #include <cstring>
-#include <cmath>
-
-#ifndef PI
-#define PI 3.14159265358979323846f
-#endif
 
 void CWGenerator::begin() {
     _freq = SIDETONE_FREQ_DEFAULT;
@@ -15,21 +10,8 @@ void CWGenerator::begin() {
     _toneRunning = false;
     _phase = Phase::Idle;
     _volCurrent = 0;
-    rebuildSineTable();
     applyVolumeTarget();
-
-    auto spkCfg = M5.Speaker.config();
-    spkCfg.magnification = 2;
-    M5.Speaker.config(spkCfg);
-}
-
-void CWGenerator::rebuildSineTable() {
-    for (size_t i = 0; i < CW_SINE_SAMPLES; ++i) {
-        float t = (2.0f * PI * (float)i) / (float)CW_SINE_SAMPLES;
-        _sine[i] = (int16_t)(sinf(t) * 14000.0f);
-    }
-    _sampleRate = (uint32_t)_freq * CW_SINE_SAMPLES;
-    if (_sampleRate < 4000) _sampleRate = 4000;
+    M5.Speaker.setChannelVolume(CW_AUDIO_CHANNEL, 0);
 }
 
 void CWGenerator::configure(uint16_t frequencyHz, uint8_t volumePercent) {
@@ -37,37 +19,33 @@ void CWGenerator::configure(uint16_t frequencyHz, uint8_t volumePercent) {
     _freq = frequencyHz;
     _volume = volumePercent;
     applyVolumeTarget();
-    if (freqChanged) {
-        rebuildSineTable();
-        if (_toneRunning) {
-            stopOscillator();
-            startOscillator();
-        }
+    if (freqChanged && _toneRunning) {
+        M5.Speaker.tone((float)_freq, UINT32_MAX, CW_AUDIO_CHANNEL, true);
     }
 }
 
 void CWGenerator::applyVolumeTarget() {
-    _volTarget = map(_volume, 0, 100, 120, 220);
+    _volTarget = map(_volume, 0, 100, 80, 255);
+    M5.Speaker.setVolume(map(_volume, 0, 100, 48, 128));
 }
 
 void CWGenerator::setOutputVolume(uint8_t vol) {
     _volCurrent = vol;
-    M5.Speaker.setVolume(vol);
+    M5.Speaker.setChannelVolume(CW_AUDIO_CHANNEL, vol);
 }
 
 void CWGenerator::startOscillator() {
     if (_toneRunning) return;
     setOutputVolume(0);
-    M5.Speaker.playRaw(_sine, CW_SINE_SAMPLES, _sampleRate, false,
-                       UINT32_MAX, 16);
+    M5.Speaker.tone((float)_freq, UINT32_MAX, CW_AUDIO_CHANNEL, false);
     _toneRunning = true;
 }
 
 void CWGenerator::stopOscillator() {
     if (!_toneRunning) return;
-    M5.Speaker.stop();
-    _toneRunning = false;
     setOutputVolume(0);
+    M5.Speaker.stop(CW_AUDIO_CHANNEL);
+    _toneRunning = false;
 }
 
 uint32_t CWGenerator::elementDurationMs(char sym) const {
@@ -164,7 +142,9 @@ void CWGenerator::startElement(uint32_t nowMs) {
         return;
     }
 
-    startOscillator();
+    if (!_toneRunning) {
+        startOscillator();
+    }
     _envStep = 0;
     _phase = Phase::Attack;
     _phaseEndMs = nowMs + (CW_ATTACK_MS / CW_ATTACK_STEPS);
@@ -211,8 +191,9 @@ void CWGenerator::update(uint32_t nowMs) {
         case Phase::PaddleRelease: {
             _envStep++;
             if (_envStep >= CW_RELEASE_STEPS) {
-                stopOscillator();
+                setOutputVolume(0);
                 if (_phase == Phase::PaddleRelease) {
+                    stopOscillator();
                     _phase = Phase::Idle;
                     break;
                 }
@@ -228,6 +209,7 @@ void CWGenerator::update(uint32_t nowMs) {
 
         case Phase::SilencePad:
             if (!_playActive) {
+                stopOscillator();
                 _phase = Phase::Idle;
                 break;
             }

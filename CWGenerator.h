@@ -3,7 +3,8 @@
 #include "Config.h"
 #include <M5Unified.h>
 
-// Sidetone CW com onda senoidal contínua + envelope suave (sem estalos)
+// Sidetone CW via M5.Speaker.tone() (ES8311 / I2S — não é buzzer piezo).
+// Tom contínuo + envelope por volume do canal — evita stop/start entre elementos.
 class CWGenerator {
 public:
     void begin();
@@ -29,7 +30,6 @@ private:
     uint8_t  _volume;
     uint8_t  _volTarget;
     uint8_t  _volCurrent;
-    uint32_t _sampleRate;
 
     bool     _paddleActive;
     bool     _playActive;
@@ -39,8 +39,6 @@ private:
     uint8_t  _wpm;
     uint8_t  _envStep;
 
-    int16_t  _sine[CW_SINE_SAMPLES];
-
     char     _pattern[16];
     uint8_t  _patIdx;
 
@@ -49,7 +47,6 @@ private:
     uint8_t  _textIdx;
     bool     _multiChar;
 
-    void rebuildSineTable();
     void applyVolumeTarget();
     void setOutputVolume(uint8_t vol);
     void startOscillator();

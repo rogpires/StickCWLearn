@@ -40,13 +40,13 @@
 #define DEBOUNCE_MS          15
 #define DISPLAY_REFRESH_MS   80
 
-// Suavização de áudio CW (anti-estalo ES8311)
-#define CW_ATTACK_MS         6
-#define CW_RELEASE_MS        10
+// Áudio CW — ES8311 + alto-falante I2S (M5.Speaker.tone, não buzzer piezo)
+#define CW_AUDIO_CHANNEL     0
+#define CW_ATTACK_MS         10
+#define CW_RELEASE_MS        15
 #define CW_SILENCE_PAD_MS    4
-#define CW_ATTACK_STEPS      3
-#define CW_RELEASE_STEPS     4
-#define CW_SINE_SAMPLES      128
+#define CW_ATTACK_STEPS      5
+#define CW_RELEASE_STEPS     5
 #define SESSION_MAX_CHARS    1024
 #define FREE_SCROLL_LINES    6
 
