@@ -6,7 +6,6 @@
 #include "StatisticsManager.h"
 #include <M5Unified.h>
 
-// Interface gráfica otimizada para tela 240x135 do M5StickS3
 class DisplayManager {
 public:
     void begin();
@@ -14,12 +13,9 @@ public:
 
     void drawBootScreen();
     void drawHome(uint8_t selectedIndex);
-    void drawSubMenuTransmit(uint8_t selectedIndex);
-    void drawSubMenuLessons(uint8_t selectedIndex);
     void drawActivity(const TrainerManager& trainer, const SettingsManager& settings,
                       bool speakerPlaying);
     void drawSettings(const SettingsManager& settings, uint8_t selectedItem);
-    void drawStatistics(const StatisticsManager& stats);
 
     bool needsRedraw() const;
     void markDirty();
@@ -38,10 +34,10 @@ private:
     bool _lastSpeakerPlaying;
 
     void drawHeader(const char* title, uint8_t wpm = 0);
-    void drawFooter(const char* btnA, const char* btnB);
+    void drawFooterMenu();
+    void drawFooterPractice();
+    void drawCenteredBig(int y, const char* text, uint8_t textSize, uint32_t color);
     void drawCarouselItem(const char* prev, const char* current, const char* next,
                           uint32_t color = TFT_CYAN);
-    void drawBigText(int y, const char* text, uint8_t textSize, uint32_t color);
-    void drawCenteredBig(int y, const char* text, uint8_t textSize, uint32_t color);
     const char* elementName(MorseElement el) const;
 };

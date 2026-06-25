@@ -1,19 +1,15 @@
 // =============================================================================
-// StickCWLearn.ino — Professor Inteligente de Telegrafia Morse
+// StickCWLearn — Treinador CW para M5StickS3
 // =============================================================================
-//
-// NAVEGAÇÃO UNIFICADA (M5StickS3 — BtnA GPIO11, BtnB GPIO12):
-//   MENUS (INICIO / submenus):  A = próximo   |  B = ENTRAR
-//   ATIVIDADES (treino etc.):   A = ação extra |  B = INÍCIO
-//   CONFIG:                     A = alterar    |  B = próximo (último = SAIR)
-//   NÃO use o botão de ENERGIA — ele reinicia o aparelho!
+// NAVEGAÇÃO (sempre igual):
+//   MENU (início, config):  A = PROX   |  B = OK
+//   PRÁTICA (treino, monitor): A = OUVIR |  B = MENU (volta)
 // =============================================================================
 
 #include <M5Unified.h>
 #include "Config.h"
 #include "CWInput.h"
 #include "CWGenerator.h"
-#include "MorseDecoder.h"
 #include "TrainerManager.h"
 #include "DisplayManager.h"
 #include "SettingsManager.h"
@@ -26,37 +22,29 @@ CWGenerator       gSidetone;
 TrainerManager    gTrainer;
 DisplayManager    gDisplay;
 
-AppMode  gAppMode      = AppMode::HOME;
-uint8_t  gMenuIndex    = 0;
-uint8_t  gSettingsItem = 0;
+AppMode  gAppMode       = AppMode::HOME;
+uint8_t  gMenuIndex     = 0;
+uint8_t  gSettingsItem  = 0;
 uint32_t gLastDisplayMs = 0;
 uint32_t gBootMs        = 0;
 bool     gBootDone      = false;
-bool     gWasSpeakerPlaying = false;
+bool     gWasPlaying    = false;
 
-static const AppMode TRANSMIT_MODES[] = { AppMode::MONITOR, AppMode::TRAIN_FREE };
-static constexpr uint8_t TRANSMIT_COUNT = 3;
-
-static const AppMode LESSON_MODES[] = {
-    AppMode::TRAIN_LETTERS, AppMode::TRAIN_NUMBERS,
-    AppMode::TRAIN_WORDS, AppMode::TRAIN_CALLSIGN
+static const AppMode HOME_MODES[] = {
+    AppMode::TRAIN_LETTERS, AppMode::TRAIN_NUMBERS, AppMode::TRAIN_WORDS,
+    AppMode::TRAIN_CALLSIGN, AppMode::MONITOR, AppMode::SETTINGS
 };
-static constexpr uint8_t LESSON_COUNT = 5;
-
-static constexpr uint8_t HOME_COUNT = 5;
-static constexpr uint8_t SETTINGS_COUNT = 8;
+static constexpr uint8_t HOME_COUNT = 6;
+static constexpr uint8_t SETTINGS_COUNT = 5;
 
 void onKeyEvent(const KeyEvent& ev);
 void handleButtons();
-void handleMenuConfirm();
-void handleBack();
 void goHome();
-void enterActivity(AppMode mode);
+void enterMode(AppMode mode);
 void applySettings();
-bool isActivityMode(AppMode m);
-bool isMenuMode(AppMode m);
+void startPendingPlayback();
+bool isPracticeMode(AppMode m);
 
-// =============================================================================
 void setup() {
     auto cfg = M5.config();
     cfg.internal_mic = false;
@@ -73,7 +61,6 @@ void setup() {
 
     gDisplay.drawBootScreen();
     gBootMs = millis();
-
     gInput.setCallback(onKeyEvent);
     gAppMode = AppMode::HOME;
     gMenuIndex = 0;
@@ -82,7 +69,6 @@ void setup() {
     gDisplay.markDirty();
 }
 
-// =============================================================================
 void loop() {
     M5.update();
     uint32_t now = millis();
@@ -99,50 +85,40 @@ void loop() {
     gTrainer.update(now);
     gSidetone.update(now);
 
-    bool speakerPlaying = gSidetone.isPlaying();
-    if (gWasSpeakerPlaying && !speakerPlaying) {
+    bool playing = gSidetone.isPlaying();
+    if (gWasPlaying && !playing) {
+        gTrainer.onPlaybackFinished();
         gDisplay.markDirty();
     }
-    gWasSpeakerPlaying = speakerPlaying;
+    gWasPlaying = playing;
 
-    if (gTrainer.pendingMorsePlayback() && !speakerPlaying) {
-        gSidetone.playCharacter(gTrainer.playbackChar(), gSettings.wpm);
-        gTrainer.clearPlaybackPending();
-        gDisplay.markDirty();
-    }
-
-    if (gAppMode == AppMode::PROFESSOR) {
-        gTrainer.analyzeManipulation(gInput, gSettings.wpm);
-    }
-
+    startPendingPlayback();
     handleButtons();
 
     if (now - gLastDisplayMs >= DISPLAY_REFRESH_MS || gDisplay.needsRedraw()) {
         gLastDisplayMs = now;
-        switch (gAppMode) {
-            case AppMode::HOME:
-                gDisplay.drawHome(gMenuIndex);
-                break;
-            case AppMode::MENU_TRANSMIT:
-                gDisplay.drawSubMenuTransmit(gMenuIndex);
-                break;
-            case AppMode::MENU_LESSONS:
-                gDisplay.drawSubMenuLessons(gMenuIndex);
-                break;
-            case AppMode::SETTINGS:
-                gDisplay.drawSettings(gSettings, gSettingsItem);
-                break;
-            case AppMode::STATISTICS:
-                gDisplay.drawStatistics(gStats);
-                break;
-            default:
-                gDisplay.drawActivity(gTrainer, gSettings, speakerPlaying);
-                break;
+        if (gAppMode == AppMode::HOME) {
+            gDisplay.drawHome(gMenuIndex);
+        } else if (gAppMode == AppMode::SETTINGS) {
+            gDisplay.drawSettings(gSettings, gSettingsItem);
+        } else {
+            gDisplay.drawActivity(gTrainer, gSettings, playing);
         }
     }
 }
 
-// =============================================================================
+void startPendingPlayback() {
+    if (!gTrainer.pendingPlayback() || gSidetone.isPlaying()) return;
+
+    if (gTrainer.playbackIsText()) {
+        gSidetone.playText(gTrainer.playbackText(), gSettings.wpm);
+    } else {
+        gSidetone.playCharacter(gTrainer.playbackChar(), gSettings.wpm);
+    }
+    gTrainer.clearPlaybackPending();
+    gDisplay.markDirty();
+}
+
 void onKeyEvent(const KeyEvent& ev) {
     switch (ev.type) {
         case KeyEventType::TONE_ON:
@@ -160,184 +136,75 @@ void onKeyEvent(const KeyEvent& ev) {
     }
 }
 
-// =============================================================================
-bool isActivityMode(AppMode m) {
-    return m == AppMode::MONITOR || m == AppMode::TRAIN_FREE
+bool isPracticeMode(AppMode m) {
+    return m == AppMode::MONITOR
         || m == AppMode::TRAIN_LETTERS || m == AppMode::TRAIN_NUMBERS
-        || m == AppMode::TRAIN_WORDS || m == AppMode::TRAIN_CALLSIGN
-        || m == AppMode::PROFESSOR;
-}
-
-bool isMenuMode(AppMode m) {
-    return m == AppMode::HOME || m == AppMode::MENU_TRANSMIT || m == AppMode::MENU_LESSONS;
+        || m == AppMode::TRAIN_WORDS || m == AppMode::TRAIN_CALLSIGN;
 }
 
 void goHome() {
-    if (gAppMode == AppMode::TRAIN_FREE) {
-        gTrainer.saveFreeSession();
-    }
     gSidetone.stopPlayback();
     gAppMode = AppMode::HOME;
     gMenuIndex = 0;
     gDisplay.markDirty();
 }
 
-void enterActivity(AppMode mode) {
+void enterMode(AppMode mode) {
     gAppMode = mode;
-    gTrainer.setMode(mode);
+    if (mode == AppMode::SETTINGS) {
+        gSettingsItem = 0;
+    } else {
+        gTrainer.setMode(mode);
+    }
     gDisplay.markDirty();
 }
 
-void handleBack() {
-    goHome();
-}
-
-// =============================================================================
-void handleMenuConfirm() {
-    switch (gAppMode) {
-        case AppMode::HOME:
-            switch (gMenuIndex) {
-                case 0:
-                    gAppMode = AppMode::MENU_TRANSMIT;
-                    gMenuIndex = 0;
-                    gDisplay.markDirty();
-                    break;
-                case 1:
-                    gAppMode = AppMode::MENU_LESSONS;
-                    gMenuIndex = 0;
-                    gDisplay.markDirty();
-                    break;
-                case 2:
-                    enterActivity(AppMode::PROFESSOR);
-                    break;
-                case 3:
-                    gAppMode = AppMode::SETTINGS;
-                    gSettingsItem = 0;
-                    gDisplay.markDirty();
-                    break;
-                case 4:
-                    gAppMode = AppMode::STATISTICS;
-                    gDisplay.markDirty();
-                    break;
-            }
-            break;
-
-        case AppMode::MENU_TRANSMIT:
-            if (gMenuIndex == TRANSMIT_COUNT - 1) goHome();
-            else enterActivity(TRANSMIT_MODES[gMenuIndex]);
-            break;
-
-        case AppMode::MENU_LESSONS:
-            if (gMenuIndex == LESSON_COUNT - 1) goHome();
-            else enterActivity(LESSON_MODES[gMenuIndex]);
-            break;
-
-        default:
-            break;
-    }
-}
-
-// =============================================================================
 void handleButtons() {
-    // ---- BtnA: próximo (menus) / ação contextual (atividades) ----
+    // ===== BtnA =====
     if (M5.BtnA.wasPressed()) {
-        switch (gAppMode) {
-            case AppMode::HOME:
-                gMenuIndex = (gMenuIndex + 1) % HOME_COUNT;
-                gDisplay.markDirty();
-                break;
-
-            case AppMode::MENU_TRANSMIT:
-                gMenuIndex = (gMenuIndex + 1) % TRANSMIT_COUNT;
-                gDisplay.markDirty();
-                break;
-
-            case AppMode::MENU_LESSONS:
-                gMenuIndex = (gMenuIndex + 1) % LESSON_COUNT;
-                gDisplay.markDirty();
-                break;
-
-            case AppMode::SETTINGS:
-                if (gSettingsItem == 7) {
-                    goHome();
-                    break;
-                }
+        if (gAppMode == AppMode::HOME) {
+            gMenuIndex = (gMenuIndex + 1) % HOME_COUNT;
+            gDisplay.markDirty();
+        }
+        else if (gAppMode == AppMode::SETTINGS) {
+            if (gSettingsItem >= SETTINGS_COUNT - 1) {
+                goHome();
+            } else {
                 switch (gSettingsItem) {
-                    case 0:
-                        gSettings.setWpm(gSettings.wpm >= WPM_MAX ? WPM_MIN : gSettings.wpm + 1);
-                        break;
+                    case 0: gSettings.setWpm(gSettings.wpm >= WPM_MAX ? WPM_MIN : gSettings.wpm + 1); break;
                     case 1: gSettings.cycleSidetone(); break;
                     case 2: gSettings.cyclePaddleMode(); break;
-                    case 3: gSettings.setBrightness(gSettings.brightness >= 100 ? 10 : gSettings.brightness + 10); break;
-                    case 4: gSettings.setInvertContacts(!gSettings.invertContacts); break;
-                    case 5: gSettings.setVolume(gSettings.volume >= 100 ? 10 : gSettings.volume + 10); break;
-                    case 6: gStats.clearAll(); break;
+                    case 3: gSettings.setVolume(gSettings.volume >= 100 ? 10 : gSettings.volume + 10); break;
                 }
                 applySettings();
                 gDisplay.markDirty();
-                break;
-
-            case AppMode::MONITOR:
-                gSettings.setWpm(gSettings.wpm >= WPM_MAX ? WPM_MIN : gSettings.wpm + 1);
-                applySettings();
-                gDisplay.markDirty();
-                break;
-
-            case AppMode::TRAIN_FREE:
-                gTrainer.clearFreeText();
-                gDisplay.markDirty();
-                break;
-
-            case AppMode::TRAIN_LETTERS:
-            case AppMode::TRAIN_NUMBERS:
-                gTrainer.replayTarget();
-                gDisplay.markDirty();
-                break;
-
-            // PROFESSOR, PALAVRAS, CALLSIGN: BtnA sem ação
-            default:
-                break;
+            }
+        }
+        else if (isPracticeMode(gAppMode)) {
+            gTrainer.replayTarget();
+            gDisplay.markDirty();
         }
     }
 
-    // ---- BtnB: ENTRAR (menus) / INÍCIO ou próximo (config) ----
+    // ===== BtnB =====
     if (M5.BtnB.wasPressed()) {
-        switch (gAppMode) {
-            case AppMode::HOME:
-            case AppMode::MENU_TRANSMIT:
-            case AppMode::MENU_LESSONS:
-                handleMenuConfirm();
-                break;
-
-            case AppMode::SETTINGS:
-                if (gSettingsItem >= SETTINGS_COUNT - 1) {
-                    goHome();
-                } else {
-                    gSettingsItem++;
-                    gDisplay.markDirty();
-                }
-                break;
-
-            case AppMode::STATISTICS:
-                goHome();
-                break;
-
-            default:
-                if (isActivityMode(gAppMode)) {
-                    handleBack();
-                }
-                break;
+        if (gAppMode == AppMode::HOME) {
+            enterMode(HOME_MODES[gMenuIndex]);
         }
-    }
-
-    // BtnA longo em menus = ENTRAR (alternativa)
-    if (M5.BtnA.pressedFor(500) && isMenuMode(gAppMode)) {
-        handleMenuConfirm();
-        while (M5.BtnA.isPressed()) { M5.update(); }
+        else if (gAppMode == AppMode::SETTINGS) {
+            if (gSettingsItem >= SETTINGS_COUNT - 1) {
+                goHome();
+            } else {
+                gSettingsItem++;
+                gDisplay.markDirty();
+            }
+        }
+        else if (isPracticeMode(gAppMode)) {
+            goHome();
+        }
     }
 }
 
-// =============================================================================
 void applySettings() {
     gDisplay.setBrightness(gSettings.brightness);
     gSidetone.configure(gSettings.sidetoneHz, gSettings.volume);
